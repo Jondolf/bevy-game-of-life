@@ -1,14 +1,15 @@
+mod cell_patterns;
 mod universe;
 mod utils;
 
-use universe::{Cell, CellState, Universe};
+use universe::{Materials, Universe};
 use utils::{Position, SizeFloat, SizeInt};
 
 use bevy::prelude::*;
 use std::time::Duration;
 
 struct SimulationConfig {
-    universe_size: SizeInt,
+    bound_padding: i32,
     tick_interval: Timer,
     /// How many neighbors a cell can live with
     allowed_neighbors: Vec<u8>,
@@ -20,20 +21,13 @@ struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            universe_size: SizeInt::new(32, 32),
+            bound_padding: 5,
             tick_interval: Timer::new(Duration::from_secs_f32(0.5), true),
             allowed_neighbors: vec![2, 3],
             allowed_neighbors_for_birth: vec![3],
             life_chance: 0.4,
         }
     }
-}
-
-#[derive(Clone, Default)]
-struct Materials {
-    cell_dead: Handle<ColorMaterial>,
-    cell_born: Handle<ColorMaterial>,
-    cell_alive: Handle<ColorMaterial>,
 }
 
 fn setup(
@@ -43,8 +37,6 @@ fn setup(
 ) {
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
     let materials = Materials {
-        cell_dead: materials.add(Color::rgb(0.0, 0.0, 0.0).into()),
-        cell_born: materials.add(Color::rgb(0.1, 0.3, 0.2).into()),
         cell_alive: materials.add(Color::rgb(0.4, 1.0, 0.6).into()),
     };
     commands.insert_resource(materials.clone());
@@ -56,111 +48,86 @@ fn setup_universe(
     sim_config: Res<SimulationConfig>,
     materials: Materials,
 ) {
-    let mut universe = Universe::generate(sim_config.universe_size, sim_config.life_chance);
-    for y in 0..universe.size.height {
-        for x in 0..universe.size.width {
-            let cell = &mut universe.cells[y as usize][x as usize];
-            let entity = commands
-                .spawn()
-                .insert(Cell)
-                .insert_bundle(SpriteBundle {
-                    material: match cell.state {
-                        CellState::Dead => materials.cell_dead.clone(),
-                        CellState::Alive => materials.cell_alive.clone(),
-                    },
-                    ..Default::default()
-                })
-                .insert(Position::new(x, y))
-                .insert(SizeFloat::new(1.0, 1.0))
-                .id();
-            cell.entity = Some(entity);
-        }
-    }
+    let universe = Universe::generate(
+        commands,
+        materials,
+        SizeInt::new(32, 32),
+        sim_config.life_chance,
+    );
     commands.spawn().insert(universe);
 }
 
 fn universe(
+    mut commands: Commands,
     time: Res<Time>,
     mut sim_config: ResMut<SimulationConfig>,
-    materials: Res<Materials>,
     mut query: Query<&mut Universe>,
-    mut sprite_materials: Query<&mut Handle<ColorMaterial>, With<Cell>>,
 ) {
-    if sim_config.tick_interval.tick(time.delta()).just_finished() {
-        for mut universe in query.iter_mut() {
-            let prev_universe = universe.clone();
+    if let Ok(mut universe) = query.single_mut() {
+        if sim_config.tick_interval.tick(time.delta()).just_finished() {
             universe.tick(
+                &mut commands,
                 &sim_config.allowed_neighbors,
                 &sim_config.allowed_neighbors_for_birth,
             );
-            for y in 0..universe.size.height as usize {
-                for x in 0..universe.size.width as usize {
-                    let cell = universe.cells[y][x];
-                    let prev_cell_state = prev_universe.cells[y][x].state;
-                    let just_born =
-                        prev_cell_state == CellState::Dead && cell.state == CellState::Alive;
-                    let not_changed = cell.state != prev_cell_state && !just_born;
-                    if !not_changed || just_born {
-                        let material = if cell.state == CellState::Dead {
-                            materials.cell_dead.clone()
-                        } else if just_born {
-                            materials.cell_born.clone()
-                        } else {
-                            materials.cell_alive.clone()
-                        };
-                        match cell.entity {
-                            Some(ent) => sprite_materials
-                                .get_mut(ent)
-                                .unwrap()
-                                .set(Box::new(material))
-                                .unwrap(),
-                            None => (),
-                        };
-                    }
-                }
-            }
         }
     }
 }
 
 fn position_translation(
     windows: Res<Windows>,
-    sim_config: Res<SimulationConfig>,
+    sim_config: ResMut<SimulationConfig>,
+    universes: Query<&Universe>,
     mut query: Query<(&Position, &mut Transform)>,
 ) {
-    fn convert(pos: f32, bound_window: f32, bound_game: f32) -> f32 {
-        let tile_size = bound_window / bound_game;
-        pos / bound_game * bound_window - (bound_window / 2.) + (tile_size / 2.)
-    }
-    let window = windows.get_primary().unwrap();
-    for (pos, mut transform) in query.iter_mut() {
-        transform.translation = Vec3::new(
-            convert(
-                pos.x as f32,
-                window.width() as f32,
-                sim_config.universe_size.width as f32,
-            ),
-            convert(
-                pos.y as f32,
-                window.height() as f32,
-                sim_config.universe_size.height as f32,
-            ),
-            0.0,
+    if let Ok(universe) = universes.single() {
+        fn convert(pos: f32, bound_window: f32, bound_game: f32) -> f32 {
+            let tile_size = bound_window / bound_game;
+            pos * tile_size - bound_window / 2.0
+        }
+        let bounds = universe.bounds().with_padding(sim_config.bound_padding);
+        let window = windows.get_primary().unwrap();
+        let universe_size = SizeInt::new(
+            (bounds.left - bounds.right).abs(),
+            (bounds.top - bounds.bottom).abs(),
         );
+        for (pos, mut transform) in query.iter_mut() {
+            transform.translation = Vec3::new(
+                convert(
+                    (pos.x - bounds.left) as f32,
+                    window.width(),
+                    universe_size.width as f32,
+                ),
+                convert(
+                    (pos.y - bounds.bottom) as f32,
+                    window.height(),
+                    universe_size.height as f32,
+                ),
+                0.0,
+            );
+        }
     }
 }
 
 fn size_scaling(
     windows: Res<Windows>,
-    sim_config: Res<SimulationConfig>,
+    sim_config: ResMut<SimulationConfig>,
+    universes: Query<&Universe>,
     mut query: Query<(&SizeFloat, &mut Sprite)>,
 ) {
-    let window = windows.get_primary().unwrap();
-    for (sprite_size, mut sprite) in query.iter_mut() {
-        sprite.size = Vec2::new(
-            sprite_size.width / sim_config.universe_size.width as f32 * window.width(),
-            sprite_size.height / sim_config.universe_size.height as f32 * window.height(),
+    if let Ok(universe) = universes.single() {
+        let window = windows.get_primary().unwrap();
+        let bounds = universe.bounds().with_padding(sim_config.bound_padding);
+        let universe_size = SizeInt::new(
+            (bounds.left - bounds.right).abs(),
+            (bounds.top - bounds.bottom).abs(),
         );
+        for (sprite_size, mut sprite) in query.iter_mut() {
+            sprite.size = Vec2::new(
+                sprite_size.width / universe_size.width as f32 * window.width(),
+                sprite_size.height / universe_size.height as f32 * window.height(),
+            );
+        }
     }
 }
 
@@ -174,8 +141,8 @@ fn main() {
         })
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .insert_resource(SimulationConfig {
-            universe_size: SizeInt::new(128, 128),
-            tick_interval: Timer::new(Duration::from_secs_f32(0.05), true),
+            tick_interval: Timer::new(Duration::from_secs_f32(0.1), true),
+            allowed_neighbors_for_birth: vec![3],
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
