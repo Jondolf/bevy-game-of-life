@@ -48,6 +48,7 @@ pub struct Materials {
 
 /// A `HashMap` containing the positions and entities of all living cells
 pub type Cells = HashMap<Position, Cell>;
+
 #[derive(Clone, Default)]
 pub struct Universe {
     pub cells: Cells,

@@ -1,53 +1,13 @@
-mod cell_patterns;
-mod universe;
-mod utils;
-
-use universe::{Materials, Universe};
-use utils::{Position, SizeFloat, SizeInt};
+use rust_game_of_life::{
+    universe::{Materials, Universe},
+    utils::{Position, SizeFloat},
+    SimulationConfig,
+};
 
 use bevy::{prelude::*, render::camera::Camera};
 use std::time::Duration;
 
-/// Configuration for universe generation
-struct GenerationConfig {
-    /// The initial size of the universe
-    initial_size: SizeInt,
-    /// How likely it is for a cell to be alive when generating the universe, a number between 0.0 - 1.0
-    life_chance: f32,
-}
-impl Default for GenerationConfig {
-    fn default() -> Self {
-        Self {
-            initial_size: SizeInt::new(32, 32),
-            life_chance: 0.4,
-        }
-    }
-}
-
-struct SimulationConfig {
-    /// Extra padding added to the universe's bounds
-    bound_padding: i32,
-    /// How often the universe updates
-    tick_interval: Timer,
-    paused: bool,
-    /// How many neighbors a cell can live with
-    allowed_neighbors: Vec<u8>,
-    /// How many neighbors are required for a dead cell to become a live cell, as if by reproduction
-    allowed_neighbors_for_birth: Vec<u8>,
-    generation: GenerationConfig,
-}
-impl Default for SimulationConfig {
-    fn default() -> Self {
-        Self {
-            bound_padding: 5,
-            tick_interval: Timer::new(Duration::from_secs_f32(0.5), true),
-            paused: false,
-            allowed_neighbors: vec![2, 3],
-            allowed_neighbors_for_birth: vec![3],
-            generation: GenerationConfig::default(),
-        }
-    }
-}
+struct UniverseTimer(Timer);
 
 struct CursorPosition {
     x: f32,
@@ -66,6 +26,7 @@ fn setup(
         cell_alive: materials.add(Color::rgb(0.4, 1.0, 0.6).into()),
     };
     commands.insert_resource(materials.clone());
+    commands.insert_resource(UniverseTimer(Timer::new(sim_config.tick_speed, true)));
     setup_universe(&mut commands, sim_config, materials)
 }
 
@@ -86,11 +47,12 @@ fn setup_universe(
 fn universe(
     mut commands: Commands,
     time: Res<Time>,
-    mut sim_config: ResMut<SimulationConfig>,
+    mut universe_timer: ResMut<UniverseTimer>,
     mut query: Query<&mut Universe>,
+    sim_config: Res<SimulationConfig>,
 ) {
     if let Ok(mut universe) = query.single_mut() {
-        if sim_config.tick_interval.tick(time.delta()).just_finished() && !sim_config.paused {
+        if universe_timer.0.tick(time.delta()).just_finished() && !sim_config.paused {
             universe.tick(
                 &mut commands,
                 &sim_config.allowed_neighbors,
@@ -219,7 +181,7 @@ fn main() {
         })
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .insert_resource(SimulationConfig {
-            tick_interval: Timer::new(Duration::from_secs_f32(0.1), true),
+            tick_speed: Duration::from_secs_f32(0.1),
             allowed_neighbors: vec![2, 3],
             allowed_neighbors_for_birth: vec![3],
             ..Default::default()
