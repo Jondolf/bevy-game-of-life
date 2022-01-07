@@ -33,6 +33,12 @@ impl Bounds {
             left: self.left - padding,
         }
     }
+    pub fn size(&self) -> SizeInt {
+        SizeInt::new(
+            (self.left - self.right).abs(),
+            (self.top - self.bottom).abs(),
+        )
+    }
 }
 
 #[derive(Clone, Default)]
